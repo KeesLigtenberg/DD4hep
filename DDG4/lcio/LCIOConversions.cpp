@@ -66,6 +66,8 @@ namespace DD4hep {
    */
   namespace Simulation   {
 
+    struct trackIDExtension : lcrtrel::LCIntExtension<trackIDExtension> {};
+
     typedef Geometry::VolumeManager VolMgr;
     typedef Geometry::IDDescriptor  IDDescriptor;
 
@@ -157,7 +159,7 @@ namespace DD4hep {
     /**
      *  This converter is to be used, when the sensitive detectors create fill collections
      *  of type Geant4HitCollection with objects of type **Geant4Calorimeter::Hit**.
-     *  The original objects are untouched and are automatically when the hosting
+     *  The original objects are untouched and are automatically deleted when the hosting
      *  Geant4HitCollection object is released.
      *
      *  @author M.Frank
@@ -249,14 +251,38 @@ namespace DD4hep {
                          lcio::SimTrackerHitImpl>::operator()(const arg_t& args)  const
     {
       Geant4Sensitive* sd  = args.second->sensitive();
+      Geant4HitCollection* coll = args.second;
       string           dsc = encoding(sd->sensitiveDetector());
       output_t*        lc  = new lcio::LCCollectionVec(lcio::LCIO::SIMTRACKERHIT);
-      int hit_creation_mode = sd->hitCreationMode();
+      int 			   hit_creation_mode = sd->hitCreationMode();
+      size_t           nhits = coll->GetSize();
+
 
       if ( hit_creation_mode == Geant4Sensitive::DETAILED_MODE )
         lc->setFlag(UTIL::make_bitset32(LCIO::CHBIT_LONG,LCIO::CHBIT_STEP,LCIO::CHBIT_ID1));
       else
         lc->setFlag(UTIL::make_bitset32(LCIO::CHBIT_LONG,LCIO::CHBIT_ID1));
+      }
+
+      //add mcParticle to be moved hits
+      Geant4ParticleMap*     pm      = args.first->event().extension<Geant4ParticleMap>();
+      lcio::LCEventImpl*     lc_evt  = args.first->event().extension<lcio::LCEventImpl>();
+      EVENT::LCCollection*   lc_part = lc_evt->getCollection(lcio::LCIO::MCPARTICLE);
+
+      for(size_t i=0; i<nhits; ++i)   {
+        lcio::SimTrackerHitImpl* hit = coll->hit(i);
+        int trackID=hit->ext<trackIDExtension>();
+        const bool assignMCParticleOnlyToFirstTrack=true; //use this option for deltas from a particle gun track!
+        if(!trackID || (assignMCParticleOnlyToFirstTrack && trackID!=1) ) {
+        	hit->setMCParticle(0);
+        	continue;
+        }
+        int particleID = pm->particleID( hit->ext<trackIDExtension>() );
+        EVENT::MCParticle* lc_mcp = (EVENT::MCParticle*)lc_part->getElementAt(particleID);
+        if(!lc_mcp) {continue;}
+        hit->setMCParticle(lc_mcp);
+      }
+
       UTIL::CellIDEncoder<SimTrackerHit> decoder(dsc,lc);
       return moveEntries<lcio::SimTrackerHitImpl>(args.second,lc);
     }
